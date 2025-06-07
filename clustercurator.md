@@ -103,7 +103,7 @@ One of the most powerful integrations of the `cluster-curator-controller` is wit
     ```
 
 This flow empowers you to inject custom automation at critical points, ensuring your hosted clusters are perfectly tailored from the moment they come online.
----
+
 
 #### 2. Fine-Grained RBAC for `ClusterCurator` Resources
 
@@ -111,7 +111,6 @@ Controlling who can trigger and view these curation jobs is paramount for operat
 
 **Use Case:** Grant specific teams or automation accounts the ability to *create and modify* `ClusterCurator` resources (e.g., Platform Engineers), while others can only *view* their status (e.g., Application Developers).
 
-```
 These ClusterRole definitions, when bound to ServiceAccounts, Users, or Groups, allow for precise control over who can initiate or monitor cluster curation workflows.
 
 
@@ -145,7 +144,7 @@ spec:
 ```
 
 
-When this ClusterCurator resource is applied, the controller will proceed with the upgrade to '4.15.39', overriding any recommendations from the OpenShift update service. This mechanism offers critical flexibility for managing diverse cluster environments.
+When this `ClusterCurator` resource is applied, the controller will proceed with the upgrade to '4.15.39', overriding any recommendations from the OpenShift update service. This mechanism offers critical flexibility for managing diverse cluster environments.
 
 ### Improving Your Cluster Curation Workflow
 
