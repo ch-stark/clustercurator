@@ -176,7 +176,7 @@ spec:
 ```
 
 
-This would require a change in the cluster-curator-controller itself to prioritize the imageDigest field if provided, setting 'ClusterVersion.spec.desiredUpdate.image' directly.
+This would require a change in the cluster-curator-controller itself to prioritize the imageDigest field if provided, setting `ClusterVersion.spec.desiredUpdate.image` directly.
 
 Benefit: This would avoid breaking automation by eliminating the need for an extra script to manually patch the ClusterVersion with the correct digest. It directly addresses a critical pain point for users operating in air-gapped or strictly disconnected environments, significantly streamlining their upgrade workflows.
 
