@@ -140,6 +140,8 @@ rules:
   verbs:
   - get # Editors need to check status after modifying
 ---
+
+```yaml
 # Permissions for end users to view ClusterCurators
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -161,6 +163,10 @@ rules:
   verbs:
   - get # Viewers need to check status
 These ClusterRole definitions, when bound to ServiceAccounts, Users, or Groups, allow for precise control over who can initiate or monitor cluster curation workflows.
+---
+
+
+
 
 3. Monitoring and Diagnostics
 Understanding the state of your curation jobs is critical. The cluster-curator-controller makes this transparent through standard Kubernetes Job logs.
@@ -184,9 +190,12 @@ oc logs job/<CURATOR_JOB_NAME> -c posthook-ansiblejob -n <HOSTED_CLUSTER_NAMESPA
 
 # Add "-f" to tail the output for real-time monitoring:
 oc logs -f job/<CURATOR_JOB_NAME> -c activate-and-monitor -n <HOSTED_CLUSTER_NAMESPACE>
+---
+
+
 If a failure occurs, the Job's status will reflect this. Inspecting the curator-job-container value within the job logs can pinpoint the exact step where the failure occurred. If monitor is the container, look for additional provisioning jobs for more detail.
 
-Improving Your Cluster Curation Workflow
+"Improving Your Cluster Curation Workflow
 Based on these technical examples, here are two suggestions to further enhance your use of cluster-curator-controller:
 
 Suggestion 1: Implement GitOps for ClusterCurator Definitions:
