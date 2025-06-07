@@ -169,8 +169,7 @@ Diagnostic Steps:
 
 To monitor the status of the provisioning, you can look at the ClusterCurator status itself, but for detailed execution, directly inspect the logs of the underlying Kubernetes Jobs created by the controller within the hosted cluster's namespace.
 
-Bash
-
+```
 # To list the curator jobs:
 oc get jobs -n <HOSTED_CLUSTER_NAMESPACE> -l open-cluster-management.io/cluster-curator
 
@@ -184,20 +183,21 @@ oc logs job/<CURATOR_JOB_NAME> -c posthook-ansiblejob -n <HOSTED_CLUSTER_NAMESPA
 
 # Add "-f" to tail the output for real-time monitoring:
 oc logs -f job/<CURATOR_JOB_NAME> -c activate-and-monitor -n <HOSTED_CLUSTER_NAMESPACE>
----
+```
 
 
 If a failure occurs, the Job's status will reflect this. Inspecting the curator-job-container value within the job logs can pinpoint the exact step where the failure occurred. If monitor is the container, look for additional provisioning jobs for more detail.
 
-"Improving Your Cluster Curation Workflow
+##  Improving Your Cluster Curation Workflow
 Based on these technical examples, here are two suggestions to further enhance your use of cluster-curator-controller:
 
-Suggestion 1: Implement GitOps for ClusterCurator Definitions:
+### Suggestion 1: Implement GitOps for ClusterCurator Definitions:
 
 How to improve: Treat your ClusterCurator Custom Resources themselves as GitOps artifacts. Store them in a Git repository alongside your HostedCluster and NodePool definitions.
 Technical Implementation: Use a GitOps operator like OpenShift GitOps (Argo CD) on your RHACM hub cluster. Configure Argo CD to synchronize your Git repository containing these YAML definitions to the hub.
 Benefit: This establishes a single source of truth for your cluster's desired state and its associated curation workflows. All changes are version-controlled, auditable, and can be managed through pull requests, streamlining collaboration and ensuring consistency. When you want to provision a new cluster with predefined curation, you simply commit the relevant YAML files to Git.
-Suggestion 2: Dynamic towerAuthSecret Management and Reuse:
+
+###       Suggestion 2: Dynamic towerAuthSecret Management and Reuse:
 
 How to improve: Instead of manually creating a towerAuthSecret for each HostedCluster and ClusterCurator pair, centralize and automate its creation and injection.
 Technical Implementation:
