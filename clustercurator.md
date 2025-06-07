@@ -111,91 +111,19 @@ Controlling who can trigger and view these curation jobs is paramount for operat
 
 **Use Case:** Grant specific teams or automation accounts the ability to *create and modify* `ClusterCurator` resources (e.g., Platform Engineers), while others can only *view* their status (e.g., Application Developers).
 
-**RBAC Configuration:**
-
-```yaml
-# Permissions for end users to edit ClusterCurators
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: clustercurator-editor-role
-rules:
-- apiGroups:
-  - cluster.open-cluster-management.io # Corrected API group
-  resources:
-  - clustercurators
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - cluster.open-cluster-management.io # Corrected API group
-  resources:
-  - clustercurators/status
-  verbs:
-  - get # Editors need to check status after modifying
----
-# Permissions for end users to view ClusterCurators
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: clustercurator-viewer-role
-rules:
-- apiGroups:
-  - cluster.open-cluster-management.io # Corrected API group
-  resources:
-  - clustercurators
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - cluster.open-cluster-management.io # Corrected API group
-  resources:
-  - clustercurators/status
-  verbs:
-  - get # Viewers need to check status
 ```
 These ClusterRole definitions, when bound to ServiceAccounts, Users, or Groups, allow for precise control over who can initiate or monitor cluster curation workflows.
 
-3. Monitoring and Diagnostics
-Understanding the state of your curation jobs is critical. The cluster-curator-controller makes this transparent through standard Kubernetes Job logs.
 
-Diagnostic Steps:
+### Empowering Flexible Upgrades: Bypassing Recommended Versions with ClusterCurator
 
-To monitor the status of the provisioning, you can look at the ClusterCurator status itself, but for detailed execution, directly inspect the logs of the underlying Kubernetes Jobs created by the controller within the hosted cluster's namespace.
-
-```yaml
-# To list the curator jobs:
-oc get jobs -n <HOSTED_CLUSTER_NAMESPACE> -l open-cluster-management.io/cluster-curator
-
-# To view logs for a specific phase of a job:
-# Replace <CURATOR_JOB_NAME> (e.g., 'curator-job-d9pwh') with the actual job name
-# Replace <CONTAINER_NAME> with 'prehook-ansiblejob', 'activate-and-monitor', or 'posthook-ansiblejob'
-
-oc logs job/<CURATOR_JOB_NAME> -c prehook-ansiblejob -n <HOSTED_CLUSTER_NAMESPACE>
-oc logs job/<CURATOR_JOB_NAME> -c activate-and-monitor -n <HOSTED_CLUSTER_NAMESPACE>
-oc logs job/<CURATOR_JOB_NAME> -c posthook-ansiblejob -n <HOSTED_CLUSTER_NAMESPACE>
-
-# Add "-f" to tail the output for real-time monitoring:
-oc logs -f job/<CURATOR_JOB_NAME> -c activate-and-monitor -n <HOSTED_CLUSTER_NAMESPACE>
-```
-
-
-If a failure occurs, the Job's status will reflect this. Inspecting the curator-job-container value within the job logs can pinpoint the exact step where the failure occurred. If monitor is the container, look for additional provisioning jobs for more detail.
-
-Empowering Flexible Upgrades: Bypassing Recommended Versions with ClusterCurator
 Beyond initial provisioning, cluster-curator-controller also offers advanced capabilities for managing OpenShift cluster upgrades, including the crucial ability to specify and upgrade to non-recommended OpenShift versions. This provides significant value to customers who need fine-grained control over their cluster's lifecycle.
 
 Use Case: Upgrade an OpenShift managed cluster to a specific patch version or a release not currently marked as "recommended" by the OpenShift update graph. This is essential for scenarios like applying specific bug fixes, testing release candidates, or adhering to strict internal versioning policies.
 
-Technical Example:
+### Technical Example:
 
-To allow an upgrade to a non-recommended version, you add a specific annotation to your ClusterCurator resource. The ClusterCurator will then set the ClusterVersion resource on the managed cluster with the force update strategy.
+To allow an upgrade to a `non-recommended` version, you add a specific annotation to your ClusterCurator resource. The ClusterCurator will then set the ClusterVersion resource on the managed cluster with the force update strategy.
 
 ```yaml
 apiVersion: cluster.open-cluster-management.io/v1beta1
@@ -217,18 +145,19 @@ spec:
 ```
 
 
-When this ClusterCurator resource is applied, the controller will proceed with the upgrade to 4.15.39, overriding any recommendations from the OpenShift update service. This mechanism offers critical flexibility for managing diverse cluster environments.
+When this ClusterCurator resource is applied, the controller will proceed with the upgrade to '4.15.39', overriding any recommendations from the OpenShift update service. This mechanism offers critical flexibility for managing diverse cluster environments.
 
-Improving Your Cluster Curation Workflow
+### Improving Your Cluster Curation Workflow
+
 Based on these technical examples and recent insights from users, here are two suggestions to further enhance your use of cluster-curator-controller:
 
-Suggestion 1: Implement GitOps for ClusterCurator Definitions:
+### Suggestion 1: Implement GitOps for ClusterCurator Definitions:
 
 How to improve: Treat your ClusterCurator Custom Resources themselves as GitOps artifacts. Store them in a Git repository alongside your HostedCluster and NodePool definitions.
 Technical Implementation: Use a GitOps operator like OpenShift GitOps (Argo CD) on your RHACM hub cluster. Configure Argo CD to synchronize your Git repository containing these YAML definitions to the hub.
 Benefit: This establishes a single source of truth for your cluster's desired state and its associated curation workflows. All changes are version-controlled, auditable, and can be managed through pull requests, streamlining collaboration and ensuring consistency. When you want to provision a new cluster with predefined curation, you simply commit the relevant YAML files to Git.
 
-Suggestion 2: Direct Digest Injection for Upgrades in Disconnected Environments:
+### Suggestion 2: Direct Digest Injection for Upgrades in Disconnected Environments:
 
 The Challenge: A user recently attempted an upgrade using upgrade-allow-not-recommended-versions: 'true' with ClusterCurator. In their disconnected environment, ImageDigestMirrorSet was configured, meaning only image digests are accepted, not tags (like 4.15.39-multi). This led to ImagePullBackOff errors because ClusterCurator currently injects the tag, not the digest. Manually fetching the digest and patching the ClusterVersion was required to proceed.
 How to improve: Enhance the ClusterCurator upgrade spec to directly accept an image digest for the desired update image, or add logic to intelligently resolve the digest in air-gapped scenarios.
@@ -248,7 +177,10 @@ spec:
 ```
 
 
-This would require a change in the cluster-curator-controller itself to prioritize the imageDigest field if provided, setting ClusterVersion.spec.desiredUpdate.image directly.
+This would require a change in the cluster-curator-controller itself to prioritize the imageDigest field if provided, setting 'ClusterVersion.spec.desiredUpdate.image' directly.
+
 Benefit: This would avoid breaking automation by eliminating the need for an extra script to manually patch the ClusterVersion with the correct digest. It directly addresses a critical pain point for users operating in air-gapped or strictly disconnected environments, significantly streamlining their upgrade workflows.
-Conclusion
+
+### Conclusion
 The cluster-curator-controller fills a critical gap in sophisticated multi-cluster environments, particularly for hosted control plane deployments. By providing a job-driven, highly configurable mechanism for pre- and post-provisioning automation, including flexible version upgrades, it allows platform teams to achieve unparalleled precision in shaping their Kubernetes clusters. Leveraging it alongside RHACM, driven by GitOps principles, empowers you to automate virtually every aspect of your cluster's lifecycle, from initial deployment to critical day-2 operations. This level of curation is what transforms a collection of clusters into a truly managed and standardized fleet.
+       
