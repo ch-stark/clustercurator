@@ -160,7 +160,7 @@ rules:
   verbs:
   - get # Viewers need to check status
 These ClusterRole definitions, when bound to ServiceAccounts, Users, or Groups, allow for precise control over who can initiate or monitor cluster curation workflows.
----
+```
 
 3. Monitoring and Diagnostics
 Understanding the state of your curation jobs is critical. The cluster-curator-controller makes this transparent through standard Kubernetes Job logs.
