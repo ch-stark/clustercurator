@@ -139,9 +139,6 @@ rules:
   - clustercurators/status
   verbs:
   - get # Editors need to check status after modifying
----
-
-```yaml
 # Permissions for end users to view ClusterCurators
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -164,9 +161,6 @@ rules:
   - get # Viewers need to check status
 These ClusterRole definitions, when bound to ServiceAccounts, Users, or Groups, allow for precise control over who can initiate or monitor cluster curation workflows.
 ---
-
-
-
 
 3. Monitoring and Diagnostics
 Understanding the state of your curation jobs is critical. The cluster-curator-controller makes this transparent through standard Kubernetes Job logs.
