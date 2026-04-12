@@ -6,15 +6,49 @@ This controller is a core component of the Open Cluster Management project, meti
 
 The `cluster-curator-controller` orchestrates these operations by reacting to the `ClusterCurator` Custom Resource Definition (CRD). Unlike RHACM's policy engine which monitors for compliance, the `cluster-curator-controller` focuses on executing discrete, ordered Kubernetes Jobs to drive cluster state transitions.
 
+### Supported Operations
+
+The `ClusterCurator` CRD supports the following `desiredCuration` values, each with its own pre/post hook capabilities:
+
+| Operation | Description |
+|---|---|
+| `install` | Provision a new cluster (Hive or Hypershift) with pre/post hooks |
+| `upgrade` | Upgrade cluster version, channel, or node pools with pre/post hooks |
+| `scale` | Scale cluster workers with pre/post hooks |
+| `destroy` | Destroy a cluster with pre/post hooks |
+| `delete-cluster-namespace` | Clean up the cluster namespace |
+
 ### The Orchestration Flow of `cluster-curator-controller`
 
-When a `ClusterCurator` CR is detected, the controller launches a series of Kubernetes Jobs on the hub cluster:
+When a `ClusterCurator` CR is detected, the controller launches a Kubernetes Job on the hub cluster containing a pipeline of init containers that execute in sequence:
 
-1.  **Pre-hook Ansible:** Executes automation *before* the core cluster provisioning begins.
-2.  **Activate and Monitor:** Manages the activation (e.g., unpausing) and oversees the cluster deployment process.
-3.  **Post-hook Ansible:** Runs critical configuration and integration tasks *after* the cluster is provisioned and ready.
+1.  **Cloud Provider Setup:** Apply cloud provider secrets (AWS, GCP, Azure, VMware).
+2.  **Ansible Provider Setup:** Create Ansible Tower/AAP secrets.
+3.  **Pre-hook Ansible:** Execute automation *before* the core cluster operation begins.
+4.  **Activate and Monitor:** Manage activation (e.g., unpausing), start the operation, and monitor to completion.
+5.  **Monitor Import:** Watch ManagedCluster import status.
+6.  **Post-hook Ansible:** Run configuration and integration tasks *after* the cluster operation completes.
+7.  **Complete:** Mark curation as done.
 
-This job-centric approach ensures each step is auditable, repeatable, and deeply integrated into your Kubernetes environment.
+The controller auto-detects the cluster type (Hive vs Hypershift) by comparing the ClusterCurator name and namespace, and adjusts its behavior accordingly. This job-centric approach ensures each step is auditable, repeatable, and deeply integrated into your Kubernetes environment.
+
+### Hook Types
+
+Each operation (install, upgrade, scale, destroy) supports the following hook configuration:
+
+- **prehook** -- Array of Ansible jobs executed before the cluster operation
+- **posthook** -- Array of Ansible jobs executed after the cluster operation
+- **overrideJob** -- Completely replace the default Job spec with a custom Kubernetes Job definition
+- **towerAuthSecret** -- Reference to the Secret with Ansible Tower/AAP credentials
+- **jobMonitorTimeout** -- How long to wait for AnsibleJob discovery (default: 5 minutes)
+
+Each hook entry supports:
+- `name` (required) -- Ansible Tower/AWX job template name
+- `type` -- `Job` (default) or `Workflow` (for Ansible workflow templates)
+- `extra_vars` -- Arbitrary key-value parameters passed to Ansible
+- `job_tags` / `skip_tags` -- Ansible task filtering (Job type only)
+
+The controller automatically injects useful `extra_vars` into Ansible jobs, including `cluster_deployment` (full ClusterDeployment spec), `install_config` (networking, compute, platform config), and `cluster_info` (ManagedClusterInfo data for upgrades).
 
 ---
 
@@ -114,6 +148,93 @@ Controlling who can trigger and view these curation jobs is paramount for operat
 These ClusterRole definitions, when bound to ServiceAccounts, Users, or Groups, allow for precise control over who can initiate or monitor cluster curation workflows.
 
 
+### Hosted Cluster Upgrade Strategies
+
+The `cluster-curator-controller` supports three distinct upgrade modes for hosted clusters, giving you fine-grained control over what gets upgraded and when.
+
+#### Upgrade Both Control Plane and NodePools (Default)
+
+By default, an upgrade updates the HostedCluster release image and then rolls through all NodePools sequentially:
+
+```yaml
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: ClusterCurator
+metadata:
+  name: my-hosted-cluster
+  namespace: clusters
+spec:
+  desiredCuration: upgrade
+  upgrade:
+    desiredUpdate: "4.16.5"
+    monitorTimeout: 180 # Minutes to wait for upgrade completion (default: 120)
+```
+
+#### Upgrade NodePools Only
+
+Use `upgradeType: NodePools` to update only the worker NodePools without touching the control plane. You can also target specific NodePools with `nodePoolNames`:
+
+```yaml
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: ClusterCurator
+metadata:
+  name: my-hosted-cluster
+  namespace: clusters
+spec:
+  desiredCuration: upgrade
+  upgrade:
+    desiredUpdate: "4.16.5"
+    upgradeType: NodePools
+    nodePoolNames:
+      - my-hosted-cluster-workers-az1
+      - my-hosted-cluster-workers-az2
+```
+
+The controller validates that the NodePool version does not exceed the control plane version.
+
+#### Update Channel Only
+
+Change the update channel independently of version, for example to switch to fast or EUS channels:
+
+```yaml
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: ClusterCurator
+metadata:
+  name: my-hosted-cluster
+  namespace: clusters
+spec:
+  desiredCuration: upgrade
+  upgrade:
+    channel: "fast-4.16"
+```
+
+### EUS-to-EUS Upgrades for Hive Clusters
+
+The controller provides special handling for Extended Update Support (EUS) transitions, which require upgrading through an intermediate version. The CRD includes an `intermediateUpdate` field that manages this multi-step process automatically.
+
+**Use Case:** Upgrade from OCP 4.14 (EUS) directly to 4.16 (EUS), with the controller automatically handling the required 4.15 intermediate hop and API deprecation acknowledgments.
+
+```yaml
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: ClusterCurator
+metadata:
+  name: my-managed-cluster
+  namespace: my-managed-cluster
+spec:
+  desiredCuration: upgrade
+  upgrade:
+    intermediateUpdate: "4.15.30"
+    desiredUpdate: "4.16.5"
+    monitorTimeout: 180
+```
+
+The controller will:
+1. Create the admin acknowledgment ConfigMap entry (`ack-4.15-kube-1.28-api-removals-in-4.16`) on the managed cluster
+2. Upgrade to the intermediate version (4.15.30) first
+3. Wait for the intermediate upgrade to complete
+4. Proceed with the final upgrade to 4.16.5
+
+**Note:** The `intermediateUpdate` field has validation rules -- once set, it cannot be modified and requires `desiredUpdate` to also be present.
+
 ### Empowering Flexible Upgrades: Bypassing Recommended Versions with ClusterCurator
 
 Beyond initial provisioning, cluster-curator-controller also offers advanced capabilities for managing OpenShift cluster upgrades, including the crucial ability to specify and upgrade to non-recommended OpenShift versions. This provides significant value to customers who need fine-grained control over their cluster's lifecycle.
@@ -143,8 +264,81 @@ spec:
       # e.g., image: quay.io/openshift-release-dev/ocp-release@sha256:<digest>
 ```
 
-
 When this `ClusterCurator` resource is applied, the controller will proceed with the upgrade to '4.15.39', overriding any recommendations from the OpenShift update service. This mechanism offers critical flexibility for managing diverse cluster environments.
+
+### Scaling Clusters with Hooks
+
+The `scale` operation allows you to wrap cluster scaling with automation:
+
+```yaml
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: ClusterCurator
+metadata:
+  name: my-cluster
+  namespace: my-cluster
+spec:
+  desiredCuration: scale
+  scale:
+    towerAuthSecret: tower-access
+    prehook:
+      - name: ValidateCapacity
+        extra_vars:
+          target_replicas: 5
+    posthook:
+      - name: PostScaleValidation
+```
+
+### Destroying Clusters with Hooks
+
+The `destroy` operation ensures cleanup automation runs around cluster deletion:
+
+```yaml
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: ClusterCurator
+metadata:
+  name: my-cluster
+  namespace: my-cluster
+spec:
+  desiredCuration: destroy
+  destroy:
+    towerAuthSecret: tower-access
+    prehook:
+      - name: BackupClusterData
+      - name: DeregisterFromDNS
+    posthook:
+      - name: CleanupExternalResources
+```
+
+### Custom Job Pipelines with overrideJob
+
+For scenarios where Ansible hooks aren't sufficient, you can completely replace the default Job pipeline with a custom Kubernetes Job definition using `overrideJob`. This gives you full control over the containers, volumes, and execution logic:
+
+```yaml
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: ClusterCurator
+metadata:
+  name: my-cluster
+  namespace: my-cluster
+spec:
+  desiredCuration: install
+  install:
+    overrideJob:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: custom-install-pipeline
+      spec:
+        template:
+          spec:
+            containers:
+              - name: my-custom-curator
+                image: my-registry/my-curator:latest
+                command: ["./run-custom-pipeline.sh"]
+                env:
+                  - name: CLUSTER_NAME
+                    value: my-cluster
+            restartPolicy: Never
+```
 
 ### Improving Your Cluster Curation Workflow
 
@@ -181,5 +375,5 @@ This would require a change in the cluster-curator-controller itself to prioriti
 Benefit: This would avoid breaking automation by eliminating the need for an extra script to manually patch the ClusterVersion with the correct digest. It directly addresses a critical pain point for users operating in air-gapped or strictly disconnected environments, significantly streamlining their upgrade workflows.
 
 ### Conclusion
-The cluster-curator-controller fills a critical gap in sophisticated multi-cluster environments, particularly for hosted control plane deployments. By providing a job-driven, highly configurable mechanism for pre- and post-provisioning automation, including flexible version upgrades, it allows platform teams to achieve unparalleled precision in shaping their Kubernetes clusters. Leveraging it alongside RHACM, driven by GitOps principles, empowers you to automate virtually every aspect of your cluster's lifecycle, from initial deployment to critical day-2 operations. This level of curation is what transforms a collection of clusters into a truly managed and standardized fleet.
-       
+
+The cluster-curator-controller fills a critical gap in sophisticated multi-cluster environments, particularly for hosted control plane deployments. With support for install, upgrade (including EUS-to-EUS transitions, NodePool-only upgrades, and channel management), scale, and destroy operations -- each with pre/post Ansible hooks or fully custom Job pipelines -- it gives platform teams comprehensive lifecycle automation. Leveraging it alongside RHACM, driven by GitOps principles, empowers you to automate virtually every aspect of your cluster's lifecycle, from initial deployment to critical day-2 operations. This level of curation is what transforms a collection of clusters into a truly managed and standardized fleet.
