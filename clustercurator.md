@@ -10,13 +10,13 @@ The `cluster-curator-controller` orchestrates these operations by reacting to th
 
 The `ClusterCurator` CRD supports the following `desiredCuration` values, each with its own pre/post hook capabilities:
 
-| Operation | Description |
-|---|---|
-| `install` | Provision a new cluster (Hive or Hypershift) with pre/post hooks |
-| `upgrade` | Upgrade cluster version, channel, or node pools with pre/post hooks |
-| `scale` | Scale cluster workers with pre/post hooks |
-| `destroy` | Destroy a cluster with pre/post hooks |
-| `delete-cluster-namespace` | Clean up the cluster namespace |
+| Operation | Description | Status |
+|---|---|---|
+| `install` | Provision a new cluster (Hive or Hypershift) with pre/post hooks | Implemented |
+| `upgrade` | Upgrade cluster version, channel, or node pools with pre/post hooks | Implemented |
+| `scale` | Scale cluster workers with pre/post hooks | Defined in API, not yet implemented |
+| `destroy` | Destroy a cluster with pre/post hooks | Implemented |
+| `delete-cluster-namespace` | Clean up the cluster namespace (only when no pods are running) | Implemented |
 
 ### The Orchestration Flow of `cluster-curator-controller`
 
@@ -34,11 +34,11 @@ The controller auto-detects the cluster type (Hive vs Hypershift) by comparing t
 
 ### Hook Types
 
-Each operation (install, upgrade, scale, destroy) supports the following hook configuration:
+Each implemented operation (install, upgrade, destroy) supports the following hook configuration:
 
 - **prehook** -- Array of Ansible jobs executed before the cluster operation
 - **posthook** -- Array of Ansible jobs executed after the cluster operation
-- **overrideJob** -- Completely replace the default Job spec with a custom Kubernetes Job definition
+- **overrideJob** -- Completely replace the default Job spec with a custom Kubernetes Job definition (**install only** -- not supported for upgrade or other operations)
 - **towerAuthSecret** -- Reference to the Secret with Ansible Tower/AAP credentials
 - **jobMonitorTimeout** -- How long to wait for AnsibleJob discovery (default: 5 minutes)
 
@@ -266,27 +266,9 @@ spec:
 
 When this `ClusterCurator` resource is applied, the controller will proceed with the upgrade to '4.15.39', overriding any recommendations from the OpenShift update service. This mechanism offers critical flexibility for managing diverse cluster environments.
 
-### Scaling Clusters with Hooks
+### Scaling Clusters with Hooks (Future)
 
-The `scale` operation allows you to wrap cluster scaling with automation:
-
-```yaml
-apiVersion: cluster.open-cluster-management.io/v1beta1
-kind: ClusterCurator
-metadata:
-  name: my-cluster
-  namespace: my-cluster
-spec:
-  desiredCuration: scale
-  scale:
-    towerAuthSecret: tower-access
-    prehook:
-      - name: ValidateCapacity
-        extra_vars:
-          target_replicas: 5
-    posthook:
-      - name: PostScaleValidation
-```
+**Note:** The `scale` operation is defined in the ClusterCurator API/CRD but is **not yet implemented** in the controller. The spec fields exist for forward compatibility, but setting `desiredCuration: scale` will not trigger any scaling action today. This section is included to document the planned API surface.
 
 ### Destroying Clusters with Hooks
 
@@ -309,9 +291,11 @@ spec:
       - name: CleanupExternalResources
 ```
 
-### Custom Job Pipelines with overrideJob
+### Custom Job Pipelines with overrideJob (Install Only)
 
-For scenarios where Ansible hooks aren't sufficient, you can completely replace the default Job pipeline with a custom Kubernetes Job definition using `overrideJob`. This gives you full control over the containers, volumes, and execution logic:
+For scenarios where Ansible hooks aren't sufficient during **new cluster provisioning**, you can completely replace the default Job pipeline with a custom Kubernetes Job definition using `spec.install.overrideJob`. This gives you full control over the containers, volumes, and execution logic.
+
+**Important:** `overrideJob` is currently only supported for the `install` operation (`spec.install.overrideJob`). While the `overrideJob` field exists in the API for other operations like `upgrade`, the controller does **not** check `spec.upgrade.overrideJob` -- it is not implemented for upgrades.
 
 ```yaml
 apiVersion: cluster.open-cluster-management.io/v1beta1
@@ -376,4 +360,4 @@ Benefit: This would avoid breaking automation by eliminating the need for an ext
 
 ### Conclusion
 
-The cluster-curator-controller fills a critical gap in sophisticated multi-cluster environments, particularly for hosted control plane deployments. With support for install, upgrade (including EUS-to-EUS transitions, NodePool-only upgrades, and channel management), scale, and destroy operations -- each with pre/post Ansible hooks or fully custom Job pipelines -- it gives platform teams comprehensive lifecycle automation. Leveraging it alongside RHACM, driven by GitOps principles, empowers you to automate virtually every aspect of your cluster's lifecycle, from initial deployment to critical day-2 operations. This level of curation is what transforms a collection of clusters into a truly managed and standardized fleet.
+The cluster-curator-controller fills a critical gap in sophisticated multi-cluster environments, particularly for hosted control plane deployments. With support for install (including custom Job pipelines via overrideJob), upgrade (including EUS-to-EUS transitions, NodePool-only upgrades, and channel management), and destroy operations -- each with pre/post Ansible hooks -- it gives platform teams comprehensive lifecycle automation. Leveraging it alongside RHACM, driven by GitOps principles, empowers you to automate virtually every aspect of your cluster's lifecycle, from initial deployment to critical day-2 operations. This level of curation is what transforms a collection of clusters into a truly managed and standardized fleet.
