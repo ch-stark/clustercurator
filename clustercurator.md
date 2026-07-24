@@ -324,17 +324,70 @@ spec:
             restartPolicy: Never
 ```
 
+### Day-2 GitOps Upgrades for ACM-Managed Clusters
+
+Platform teams often ask whether GitOps-driven OpenShift upgrades are a supported pattern for RHACM-managed clusters, and whether they should manage `ClusterCurator` or patch `ClusterVersion` directly. The recommended model is:
+
+**Git → OpenShift GitOps (Argo CD) on the RHACM hub → `ClusterCurator` → curator Job (prehook → upgrade → monitor → posthook) → managed-cluster `ClusterVersion`.**
+
+Treat `ClusterCurator` manifests as GitOps artifacts on the hub. Store them alongside related lifecycle resources (`HostedCluster`, `NodePool`, or Hive cluster definitions). Argo CD syncs desired upgrade intent to the hub; `cluster-curator-controller` owns the upgrade execution and ultimately updates `ClusterVersion` on the managed cluster.
+
+#### Prefer `ClusterCurator` over GitOps-managed `ClusterVersion`
+
+| Approach | Guidance |
+|---|---|
+| **`ClusterCurator` via GitOps on the hub** | **Preferred** for ACM-managed fleets |
+| **Direct `ClusterVersion` via GitOps on spokes** | Technically valid (native CVO), but bypasses ACM hooks, monitoring, and EUS orchestration |
+
+Prefer `ClusterCurator` when you need Ansible pre/post hooks, hub-side Job monitoring and timeouts, EUS-to-EUS (`intermediateUpdate`), or hosted control plane upgrade modes. Git should own `ClusterCurator`; ClusterCurator should own `ClusterVersion`. Avoid dual-managing both.
+
+For very large ZTP/edge fleets, Topology Aware Lifecycle Manager (TALM) and `ClusterGroupUpgrade` remain a strong alternative for policy-driven batch upgrades. For typical mid-size fleets (for example ~10 clusters) with validation gates, hub GitOps of `ClusterCurator` is usually the better fit.
+
+#### Argo CD health for long-running upgrades
+
+Upgrades take longer than a normal Application sync. Add a custom Argo CD health check for `ClusterCurator` so Applications:
+
+- stay **Progressing** while the curator Job, Ansible hooks, or cluster upgrade are running
+- become **Healthy** when curation completes successfully
+- become **Degraded** when a prehook, posthook, or upgrade Job fails
+
+Keep the Argo Application resource of record as the hub `ClusterCurator`, not the spoke `ClusterVersion`. Do not treat Progressing as failure during an in-flight upgrade.
+
+#### Prehook validation and posthook verification
+
+The upgrade **prehook** is the supported place to gate the upgrade. Use idempotent Ansible Automation Platform job templates for checks such as:
+
+- deprecated API usage
+- MachineConfigPool / MachineConfig health
+- ClusterOperator readiness
+- operator channel / version compatibility
+- backup or snapshot confirmation
+
+If the prehook fails, the upgrade should not proceed. Use **posthooks** to verify the cluster after the version change (operators healthy, pools updated, smoke tests) and to mark the cluster ready for the next promotion stage.
+
+#### Staged promotion (dev → staging → production)
+
+Encode stages in Git rather than relying on a single sync to upgrade every cluster:
+
+1. Separate directories or Argo Applications per environment (`dev/`, `staging/`, `prod/`) or per cluster group.
+2. Promote by pull request or release tag only after the prior stage Application is Healthy.
+3. Canary one cluster in each stage, then roll the remainder.
+4. On Degraded health, stop promotion; keep production sync manual or approval-gated.
+
+#### Handling version drift without unsupported downgrades
+
+OpenShift does **not** support downgrade. Git must never declare a lower version than the live cluster.
+
+- If a cluster is upgraded outside Git (ACM console, `oc`, emergency patch), update Git `desiredUpdate` to the **current or higher** version before Argo reconciles.
+- Enforce CI checks that reject PRs where desired version is lower than the live cluster version.
+- Never sync an older `desiredUpdate` to "fix drift."
+- After a successful upgrade, leave Git at the current version (or idle the upgrade intent per your curator workflow) so Argo stays InSync and does not re-fire upgrades.
+
 ### Improving Your Cluster Curation Workflow
 
-Based on these technical examples and recent insights from users, here are two suggestions to further enhance your use of cluster-curator-controller:
+Based on these technical examples and recent insights from users, here is an additional suggestion to further enhance your use of cluster-curator-controller:
 
-### Suggestion 1: Implement GitOps for ClusterCurator Definitions:
-
-How to improve: Treat your ClusterCurator Custom Resources themselves as GitOps artifacts. Store them in a Git repository alongside your HostedCluster and NodePool definitions.
-Technical Implementation: Use a GitOps operator like OpenShift GitOps (Argo CD) on your RHACM hub cluster. Configure Argo CD to synchronize your Git repository containing these YAML definitions to the hub.
-Benefit: This establishes a single source of truth for your cluster's desired state and its associated curation workflows. All changes are version-controlled, auditable, and can be managed through pull requests, streamlining collaboration and ensuring consistency. When you want to provision a new cluster with predefined curation, you simply commit the relevant YAML files to Git.
-
-### Suggestion 2: Direct Digest Injection for Upgrades in Disconnected Environments:
+### Suggestion: Direct Digest Injection for Upgrades in Disconnected Environments:
 
 The Challenge: A user recently attempted an upgrade using upgrade-allow-not-recommended-versions: 'true' with ClusterCurator. In their disconnected environment, ImageDigestMirrorSet was configured, meaning only image digests are accepted, not tags (like 4.15.39-multi). This led to ImagePullBackOff errors because ClusterCurator currently injects the tag, not the digest. Manually fetching the digest and patching the ClusterVersion was required to proceed.
 How to improve: Enhance the ClusterCurator upgrade spec to directly accept an image digest for the desired update image, or add logic to intelligently resolve the digest in air-gapped scenarios.
@@ -360,4 +413,4 @@ Benefit: This would avoid breaking automation by eliminating the need for an ext
 
 ### Conclusion
 
-The cluster-curator-controller fills a critical gap in sophisticated multi-cluster environments, particularly for hosted control plane deployments. With support for install (including custom Job pipelines via overrideJob), upgrade (including EUS-to-EUS transitions, NodePool-only upgrades, and channel management), and destroy operations -- each with pre/post Ansible hooks -- it gives platform teams comprehensive lifecycle automation. Leveraging it alongside RHACM, driven by GitOps principles, empowers you to automate virtually every aspect of your cluster's lifecycle, from initial deployment to critical day-2 operations. This level of curation is what transforms a collection of clusters into a truly managed and standardized fleet.
+The cluster-curator-controller fills a critical gap in sophisticated multi-cluster environments, particularly for hosted control plane deployments. With support for install (including custom Job pipelines via overrideJob), upgrade (including EUS-to-EUS transitions, NodePool-only upgrades, and channel management), and destroy operations -- each with pre/post Ansible hooks -- it gives platform teams comprehensive lifecycle automation. Driving `ClusterCurator` from GitOps on the RHACM hub -- with Argo health checks, prehook validation, staged promotion, and a strict no-downgrade drift policy -- turns day-2 upgrades into a repeatable, supportable fleet operation. This level of curation is what transforms a collection of clusters into a truly managed and standardized fleet.
