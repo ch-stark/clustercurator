@@ -1,0 +1,171 @@
+---
+# ==============================================================================
+# RHACM Parallel Upgrade Orchestration & Compliance Governance Policies
+# ==============================================================================
+# Use Case: Air-gapped / large-scale fleet upgrades (100+ clusters) using
+# parallel ClusterCurator execution and ClusterVersion compliance tracking.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# POLICY 1: Hub-Side Parallel ClusterCurator Upgrade Trigger
+# Evaluates on the Hub ('local-cluster') and creates per-cluster ClusterCurator
+# CRs in each target cluster's namespace for a designated rollout wave.
+# ------------------------------------------------------------------------------
+apiVersion: policy.open-cluster-management.io/v1
+kind: Policy
+metadata:
+  name: policy-fleet-curator-parallel-upgrade
+  namespace: policies
+  annotations:
+    policy.open-cluster-management.io/categories: CM Configuration Management
+    policy.open-cluster-management.io/controls: CM-2 Baseline Configuration
+    policy.open-cluster-management.io/standards: NIST SP 800-53
+    policy.open-cluster-management.io/description: "Dynamically launches parallel ClusterCurator upgrade jobs across all clusters in a designated rollout wave."
+spec:
+  remediationAction: enforce
+  disabled: false
+  policy-templates:
+    - objectDefinition:
+        apiVersion: policy.open-cluster-management.io/v1
+        kind: ConfigurationPolicy
+        metadata:
+          name: batch-trigger-clustercurator-upgrades
+        spec:
+          remediationAction: enforce
+          severity: critical
+          object-templates-raw: |
+            {{- /* Define target release parameters */ -}}
+            {{- $targetVersion := "4.16.12" }}
+            {{- $targetChannel := "stable-4.16" }}
+            {{- $targetWave := "wave-1" }}
+
+            {{- /* Query all ManagedClusters on the Hub matching the target wave */ -}}
+            {{- range $cluster := (lookup "cluster.open-cluster-management.io/v1" "ManagedCluster" "" "").items }}
+              {{- $labels := (dig "metadata" "labels" dict $cluster) }}
+              {{- $clusterName := $cluster.metadata.name }}
+              {{- $wave := (get $labels "upgrade-wave") }}
+
+              {{- /* Skip local-cluster and target only clusters in the designated wave */ -}}
+              {{- if and (ne $clusterName "local-cluster") (eq $wave $targetWave) }}
+            - complianceType: musthave
+              objectDefinition:
+                apiVersion: cluster.open-cluster-management.io/v1beta1
+                kind: ClusterCurator
+                metadata:
+                  name: {{ $clusterName }}
+                  namespace: {{ $clusterName }}
+                  labels:
+                    fleet.openshift.io/upgrade-wave: {{ $targetWave }}
+                    fleet.openshift.io/target-version: {{ $targetVersion }}
+                spec:
+                  desiredCuration: upgrade
+                  upgrade:
+                    desiredUpdate: {{ $targetVersion }}
+                    channel: {{ $targetChannel }}
+              {{- end }}
+            {{- end }}
+---
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: Placement
+metadata:
+  name: placement-hub-orchestrator
+  namespace: policies
+spec:
+  predicates:
+    - requiredClusterSelector:
+        labelSelector:
+          matchExpressions:
+            - key: local-cluster
+              operator: In
+              values: ["true"]
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: PlacementBinding
+metadata:
+  name: binding-fleet-curator-upgrade
+  namespace: policies
+placementRef:
+  apiGroup: cluster.open-cluster-management.io
+  kind: Placement
+  name: placement-hub-orchestrator
+subjects:
+  - apiGroup: policy.open-cluster-management.io
+    kind: Policy
+    name: policy-fleet-curator-parallel-upgrade
+---
+# ------------------------------------------------------------------------------
+# POLICY 2: Fleet-Wide Upgrade Compliance & Bake Period Validator
+# Evaluates on the managed clusters within the designated wave to verify that
+# the ClusterVersion reaches the desired target version with healthy conditions.
+# ------------------------------------------------------------------------------
+apiVersion: policy.open-cluster-management.io/v1
+kind: Policy
+metadata:
+  name: policy-audit-cluster-version-compliance
+  namespace: policies
+  annotations:
+    policy.open-cluster-management.io/categories: CM Configuration Management
+    policy.open-cluster-management.io/controls: CM-2 Baseline Configuration
+    policy.open-cluster-management.io/standards: NIST SP 800-53
+    policy.open-cluster-management.io/description: "Audits that managed clusters have completed upgrading to the target version."
+spec:
+  remediationAction: inform
+  disabled: false
+  policy-templates:
+    - objectDefinition:
+        apiVersion: policy.open-cluster-management.io/v1
+        kind: ConfigurationPolicy
+        metadata:
+          name: audit-clusterversion-status
+        spec:
+          remediationAction: inform
+          severity: high
+          object-templates-raw: |
+            {{- $desiredVersion := "4.16.12" }}
+            {{- $cv := (lookup "config.openshift.io/v1" "ClusterVersion" "" "version") }}
+            {{- $currentVersion := (dig "status" "desired" "version" "" $cv) }}
+            
+            - complianceType: musthave
+              objectDefinition:
+                apiVersion: config.openshift.io/v1
+                kind: ClusterVersion
+                metadata:
+                  name: version
+                status:
+                  desired:
+                    version: {{ $desiredVersion }}
+                  conditions:
+                    - type: Available
+                      status: "True"
+                    - type: Progressing
+                      status: "False"
+                    - type: Failing
+                      status: "False"
+---
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: Placement
+metadata:
+  name: placement-wave-target-clusters
+  namespace: policies
+spec:
+  predicates:
+    - requiredClusterSelector:
+        labelSelector:
+          matchExpressions:
+            - key: upgrade-wave
+              operator: In
+              values: ["wave-1"]
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: PlacementBinding
+metadata:
+  name: binding-audit-cluster-version
+  namespace: policies
+placementRef:
+  apiGroup: cluster.open-cluster-management.io
+  kind: Placement
+  name: placement-wave-target-clusters
+subjects:
+  - apiGroup: policy.open-cluster-management.io
+    kind: Policy
+    name: policy-audit-cluster-version-compliance
