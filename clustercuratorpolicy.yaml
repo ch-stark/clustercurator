@@ -3,6 +3,10 @@ kind: Policy
 metadata:
   name: batch-trigger-cc-upgrades
   namespace: open-cluster-management-global-set
+  annotations:
+    policy.open-cluster-management.io/categories: CM Configuration Management
+    policy.open-cluster-management.io/controls: CM-2 Baseline Configuration
+    policy.open-cluster-management.io/description: "Safely triggers ClusterCurator upgrade once per cluster without repeated triggers."
 spec:
   disabled: false
   remediationAction: enforce
@@ -16,22 +20,38 @@ spec:
           remediationAction: enforce
           severity: critical
           evaluationInterval:
-            compliant: 1m
-            noncompliant: 30s
+            compliant: 2h
+            noncompliant: 1m
           object-templates-raw: |
             {{- $targetVersion := "5.0.2" }}
             {{- $targetChannel := "candidate-5.1" }}
-            {{- $cv := (lookup "config.openshift.io/v1" "ClusterVersion" "" "version") }}
-            {{- $currentVersion := (dig "status" "desired" "version" "" $cv) }}
 
-            {{- if and (ne $currentVersion "") (ne $currentVersion $targetVersion) }}
+            {{- range $cluster := (lookup "cluster.open-cluster-management.io/v1" "ManagedCluster" "" "").items }}
+              {{- $clusterName := $cluster.metadata.name }}
+              {{- $currentVersion := (dig "status" "version" "openshift" "" $cluster) }}
+
+              {{- /* 1. Look up existing ClusterCurator in the cluster namespace */ -}}
+              {{- $cc := (lookup "cluster.open-cluster-management.io/v1beta1" "ClusterCurator" $clusterName $clusterName) }}
+              
+              {{- /* 2. Check if already curated or in-progress for this target version */ -}}
+              {{- $existingTarget := (dig "metadata" "labels" "fleet.openshift.io/target-version" "" $cc) }}
+              {{- $curationPhase := (dig "spec" "desiredCuration" "" $cc) }}
+
+              {{- /* Condition logic:
+                     - Cluster has a detected version
+                     - Cluster is NOT already at target version
+                     - ClusterCurator has NOT already targeted this specific version
+                     - ClusterCurator is NOT currently executing (desiredCuration is empty)
+              */ -}}
+              {{- if and (ne $currentVersion "") (ne $currentVersion $targetVersion) }}
+                {{- if and (ne $existingTarget $targetVersion) (ne $curationPhase "upgrade") }}
             - complianceType: musthave
               objectDefinition:
                 apiVersion: cluster.open-cluster-management.io/v1beta1
                 kind: ClusterCurator
                 metadata:
-                  name: local-cluster
-                  namespace: local-cluster
+                  name: {{ $clusterName }}
+                  namespace: {{ $clusterName }}
                   labels:
                     fleet.openshift.io/target-version: {{ $targetVersion }}
                 spec:
@@ -40,4 +60,35 @@ spec:
                     desiredUpdate: {{ $targetVersion }}
                     channel: {{ $targetChannel }}
                     monitorTimeout: 120
+                {{- end }}
+              {{- end }}
             {{- end }}
+---
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: Placement
+metadata:
+  name: placement-trigger-cc-upgrades
+  namespace: open-cluster-management-global-set
+spec:
+  predicates:
+    - requiredClusterSelector:
+        labelSelector:
+          matchExpressions:
+            # Enforce on the Hub cluster itself
+            - key: local-cluster
+              operator: In
+              values: ["true"]
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: PlacementBinding
+metadata:
+  name: binding-trigger-cc-upgrades
+  namespace: open-cluster-management-global-set
+placementRef:
+  apiGroup: cluster.open-cluster-management.io
+  kind: Placement
+  name: placement-trigger-cc-upgrades
+subjects:
+  - apiGroup: policy.open-cluster-management.io
+    kind: Policy
+    name: batch-trigger-cc-upgrades
