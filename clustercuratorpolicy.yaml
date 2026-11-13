@@ -2,7 +2,7 @@ apiVersion: policy.open-cluster-management.io/v1
 kind: Policy
 metadata:
   name: batch-trigger-cc-upgrades
-  namespace: open-cluster-management-global-set # Update to your Hub policy namespace if different
+  namespace: open-cluster-management-global-set
 spec:
   disabled: false
   remediationAction: enforce
@@ -16,20 +16,14 @@ spec:
           remediationAction: enforce
           severity: critical
           object-templates-raw: |
-            {{- /* Define target release parameters */ -}}
             {{- $targetVersion := "5.0.2" }}
             {{- $targetChannel := "candidate-5.1" }}
-            {{- $targetWave := "wave-1" }}
 
-            {{- /* Query all ManagedClusters on the Hub matching the target wave */ -}}
             {{- range $cluster := (lookup "cluster.open-cluster-management.io/v1" "ManagedCluster" "" "").items }}
-              {{- $labels := (dig "metadata" "labels" dict $cluster) }}
               {{- $clusterName := $cluster.metadata.name }}
-              {{- $wave := (get $labels "upgrade-wave") }}
               {{- $currentVersion := (dig "status" "version" "openshift" "" $cluster) }}
 
-              {{- /* Skip local-cluster, target only designated wave, and stop enforcing once upgraded */ -}}
-              {{- if and (ne $clusterName "local-cluster") (eq $wave $targetWave) (ne $currentVersion "") (ne $currentVersion $targetVersion) }}
+              {{- if and (eq $clusterName "local-cluster") (ne $currentVersion "") (ne $currentVersion $targetVersion) }}
             - complianceType: musthave
               objectDefinition:
                 apiVersion: cluster.open-cluster-management.io/v1beta1
@@ -38,7 +32,6 @@ spec:
                   name: {{ $clusterName }}
                   namespace: {{ $clusterName }}
                   labels:
-                    fleet.openshift.io/upgrade-wave: {{ $targetWave }}
                     fleet.openshift.io/target-version: {{ $targetVersion }}
                 spec:
                   desiredCuration: upgrade
@@ -48,3 +41,29 @@ spec:
                     monitorTimeout: 120
               {{- end }}
             {{- end }}
+---
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: Placement
+metadata:
+  name: placement-batch-trigger-cc-upgrades
+  namespace: open-cluster-management-global-set
+spec:
+  predicates:
+    - requiredClusterSelector:
+        labelSelector:
+          matchLabels:
+            name: local-cluster
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: PlacementBinding
+metadata:
+  name: binding-batch-trigger-cc-upgrades
+  namespace: open-cluster-management-global-set
+placementRef:
+  name: placement-batch-trigger-cc-upgrades
+  kind: Placement
+  apiGroup: cluster.open-cluster-management.io
+subjects:
+  - name: batch-trigger-cc-upgrades
+    kind: Policy
+    apiGroup: policy.open-cluster-management.io
