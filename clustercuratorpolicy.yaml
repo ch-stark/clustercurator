@@ -3,6 +3,10 @@ kind: Policy
 metadata:
   name: batch-trigger-cc-upgrades
   namespace: open-cluster-management-global-set
+  annotations:
+    policy.open-cluster-management.io/categories: CM Configuration Management
+    policy.open-cluster-management.io/controls: CM-2 Baseline Configuration
+    policy.open-cluster-management.io/description: "Safely triggers ClusterCurator upgrade once per cluster without repeated triggers."
 spec:
   disabled: false
   remediationAction: enforce
@@ -15,6 +19,9 @@ spec:
         spec:
           remediationAction: enforce
           severity: critical
+          evaluationInterval:
+            compliant: 2h
+            noncompliant: 1m
           object-templates-raw: |
             {{- $targetVersion := "5.0.2" }}
             {{- $targetChannel := "candidate-5.1" }}
@@ -23,7 +30,22 @@ spec:
               {{- $clusterName := $cluster.metadata.name }}
               {{- $currentVersion := (dig "status" "version" "openshift" "" $cluster) }}
 
-              {{- if and (eq $clusterName "local-cluster") (ne $currentVersion "") (ne $currentVersion $targetVersion) }}
+              {{- /* 1. Look up existing ClusterCurator in the cluster namespace */ -}}
+              {{- $cc := (lookup "cluster.open-cluster-management.io/v1beta1" "ClusterCurator" $clusterName $clusterName) }}
+              
+              {{- /* 2. Check if already curated or in-progress for this target version */ -}}
+              {{- $existingTarget := (dig "metadata" "labels" "fleet.openshift.io/target-version" "" $cc) }}
+              {{- $curationPhase := (dig "spec" "desiredCuration" "" $cc) }}
+              {{- $upgradeStatus := (dig "status" "conditions" list $cc) }}
+
+              {{- /* Condition logic:
+                     - Cluster has a detected version
+                     - Cluster is NOT already at target version
+                     - ClusterCurator has NOT already targeted this specific version
+                     - ClusterCurator is NOT currently executing (desiredCuration is empty)
+              */ -}}
+              {{- if and (ne $currentVersion "") (ne $currentVersion $targetVersion) }}
+                {{- if and (ne $existingTarget $targetVersion) (ne $curationPhase "upgrade") }}
             - complianceType: musthave
               objectDefinition:
                 apiVersion: cluster.open-cluster-management.io/v1beta1
@@ -39,5 +61,6 @@ spec:
                     desiredUpdate: {{ $targetVersion }}
                     channel: {{ $targetChannel }}
                     monitorTimeout: 120
+                {{- end }}
               {{- end }}
             {{- end }}
