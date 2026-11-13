@@ -1,7 +1,7 @@
 apiVersion: policy.open-cluster-management.io/v1
 kind: Policy
 metadata:
-  name: batch-trigger-clustercurator-upgrades
+  name: batch-trigger-cc-upgrades
   namespace: open-cluster-management-global-set # Update to your Hub policy namespace if different
 spec:
   disabled: false
