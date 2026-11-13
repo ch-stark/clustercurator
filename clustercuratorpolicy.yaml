@@ -16,16 +16,13 @@ spec:
           remediationAction: enforce
           severity: critical
           object-templates-raw: |
-            {{- /* Define target release parameters */ -}}
             {{- $targetVersion := "5.0.2" }}
             {{- $targetChannel := "candidate-5.1" }}
 
-            {{- /* Query ManagedClusters on the Hub */ -}}
             {{- range $cluster := (lookup "cluster.open-cluster-management.io/v1" "ManagedCluster" "" "").items }}
               {{- $clusterName := $cluster.metadata.name }}
               {{- $currentVersion := (dig "status" "version" "openshift" "" $cluster) }}
 
-              {{- /* Target local-cluster and stop enforcing once upgraded to targetVersion */ -}}
               {{- if and (eq $clusterName "local-cluster") (ne $currentVersion "") (ne $currentVersion $targetVersion) }}
             - complianceType: musthave
               objectDefinition:
@@ -44,31 +41,3 @@ spec:
                     monitorTimeout: 120
               {{- end }}
             {{- end }}
----
-apiVersion: cluster.open-cluster-management.io/v1beta1
-kind: Placement
-metadata:
-  name: global
-  namespace: open-cluster-management-global-set
-spec:
-  clusterSets:
-    - global
-  tolerations:
-    - key: cluster.open-cluster-management.io/unreachable
-      operator: Equal
-    - key: cluster.open-cluster-management.io/unavailable
-      operator: Equal
----
-apiVersion: policy.open-cluster-management.io/v1
-kind: PlacementBinding
-metadata:
-  name: batch-trigger-cc-upgrades-placement-binding
-  namespace: open-cluster-management-global-set
-placementRef:
-  name: global
-  kind: Placement
-  apiGroup: cluster.open-cluster-management.io
-subjects:
-  - name: batch-trigger-cc-upgrades
-    kind: Policy
-    apiGroup: policy.open-cluster-management.io
