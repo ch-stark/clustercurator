@@ -1,3 +1,4 @@
+---
 apiVersion: policy.open-cluster-management.io/v1
 kind: Policy
 metadata:
@@ -6,7 +7,7 @@ metadata:
   annotations:
     policy.open-cluster-management.io/categories: CM Configuration Management
     policy.open-cluster-management.io/controls: CM-2 Baseline Configuration
-    policy.open-cluster-management.io/description: "Safely triggers ClusterCurator upgrade once per cluster across the entire fleet."
+    policy.open-cluster-management.io/description: "Safely triggers ClusterCurator upgrade once per cluster across the fleet."
 spec:
   disabled: false
   remediationAction: enforce
@@ -20,23 +21,25 @@ spec:
           remediationAction: enforce
           severity: critical
           evaluationInterval:
-            compliant: 2m
+            compliant: 1m
             noncompliant: 30s
           object-templates-raw: |
             {{- $targetVersion := "5.0.2" }}
             {{- $targetChannel := "candidate-5.1" }}
-            {{- $cv := (lookup "config.openshift.io/v1" "ClusterVersion" "" "version") }}
-            {{- $currentVersion := (dig "status" "desired" "version" "" $cv) }}
 
-            {{- /* Enforce upgrade on any fleet cluster whose current ClusterVersion != targetVersion */ -}}
-            {{- if and (ne $currentVersion "") (ne $currentVersion $targetVersion) }}
+            {{- range $cluster := (lookup "cluster.open-cluster-management.io/v1" "ManagedCluster" "" "").items }}
+              {{- $clusterName := $cluster.metadata.name }}
+              {{- $currentVersion := (dig "status" "version" "openshift" "" $cluster) }}
+
+              {{- /* Enforce upgrade on any fleet cluster whose OpenShift version != targetVersion */ -}}
+              {{- if and (ne $currentVersion "") (ne $currentVersion $targetVersion) }}
             - complianceType: musthave
               objectDefinition:
                 apiVersion: cluster.open-cluster-management.io/v1beta1
                 kind: ClusterCurator
                 metadata:
-                  name: {{ .ManagedClusterName }}
-                  namespace: {{ .ManagedClusterName }}
+                  name: {{ $clusterName }}
+                  namespace: {{ $clusterName }}
                   labels:
                     fleet.openshift.io/target-version: {{ $targetVersion }}
                 spec:
@@ -45,32 +48,5 @@ spec:
                     desiredUpdate: {{ $targetVersion }}
                     channel: {{ $targetChannel }}
                     monitorTimeout: 120
+              {{- end }}
             {{- end }}
----
-apiVersion: cluster.open-cluster-management.io/v1beta1
-kind: Placement
-metadata:
-  name: global
-  namespace: open-cluster-management-global-set
-spec:
-  clusterSets:
-    - global
-  tolerations:
-    - key: cluster.open-cluster-management.io/unreachable
-      operator: Equal
-    - key: cluster.open-cluster-management.io/unavailable
-      operator: Equal
----
-apiVersion: policy.open-cluster-management.io/v1
-kind: PlacementBinding
-metadata:
-  name: batch-trigger-cc-upgrades-placement-binding
-  namespace: open-cluster-management-global-set
-placementRef:
-  name: global
-  kind: Placement
-  apiGroup: cluster.open-cluster-management.io
-subjects:
-  - name: batch-trigger-cc-upgrades
-    kind: Policy
-    apiGroup: policy.open-cluster-management.io
