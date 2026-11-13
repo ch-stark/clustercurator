@@ -6,7 +6,7 @@ metadata:
   annotations:
     policy.open-cluster-management.io/categories: CM Configuration Management
     policy.open-cluster-management.io/controls: CM-2 Baseline Configuration
-    policy.open-cluster-management.io/description: "Safely triggers ClusterCurator upgrade once per cluster without repeated triggers."
+    policy.open-cluster-management.io/description: "Safely triggers ClusterCurator upgrade once per cluster across the entire fleet."
 spec:
   disabled: false
   remediationAction: enforce
@@ -20,39 +20,23 @@ spec:
           remediationAction: enforce
           severity: critical
           evaluationInterval:
-            compliant: 2h
-            noncompliant: 1m
+            compliant: 2m
+            noncompliant: 30s
           object-templates-raw: |
             {{- $targetVersion := "5.0.2" }}
             {{- $targetChannel := "candidate-5.1" }}
+            {{- $cv := (lookup "config.openshift.io/v1" "ClusterVersion" "" "version") }}
+            {{- $currentVersion := (dig "status" "desired" "version" "" $cv) }}
 
-            {{- range $cluster := (lookup "cluster.open-cluster-management.io/v1" "ManagedCluster" "" "").items }}
-              {{- $clusterName := $cluster.metadata.name }}
-              {{- $currentVersion := (dig "status" "version" "openshift" "" $cluster) }}
-
-              {{- /* 1. Look up existing ClusterCurator in the cluster namespace */ -}}
-              {{- $cc := (lookup "cluster.open-cluster-management.io/v1beta1" "ClusterCurator" $clusterName $clusterName) }}
-              
-              {{- /* 2. Check if already curated or in-progress for this target version */ -}}
-              {{- $existingTarget := (dig "metadata" "labels" "fleet.openshift.io/target-version" "" $cc) }}
-              {{- $curationPhase := (dig "spec" "desiredCuration" "" $cc) }}
-              {{- $upgradeStatus := (dig "status" "conditions" list $cc) }}
-
-              {{- /* Condition logic:
-                     - Cluster has a detected version
-                     - Cluster is NOT already at target version
-                     - ClusterCurator has NOT already targeted this specific version
-                     - ClusterCurator is NOT currently executing (desiredCuration is empty)
-              */ -}}
-              {{- if and (ne $currentVersion "") (ne $currentVersion $targetVersion) }}
-                {{- if and (ne $existingTarget $targetVersion) (ne $curationPhase "upgrade") }}
+            {{- /* Enforce upgrade on any fleet cluster whose current ClusterVersion != targetVersion */ -}}
+            {{- if and (ne $currentVersion "") (ne $currentVersion $targetVersion) }}
             - complianceType: musthave
               objectDefinition:
                 apiVersion: cluster.open-cluster-management.io/v1beta1
                 kind: ClusterCurator
                 metadata:
-                  name: {{ $clusterName }}
-                  namespace: {{ $clusterName }}
+                  name: {{ .ManagedClusterName }}
+                  namespace: {{ .ManagedClusterName }}
                   labels:
                     fleet.openshift.io/target-version: {{ $targetVersion }}
                 spec:
@@ -61,6 +45,32 @@ spec:
                     desiredUpdate: {{ $targetVersion }}
                     channel: {{ $targetChannel }}
                     monitorTimeout: 120
-                {{- end }}
-              {{- end }}
             {{- end }}
+---
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: Placement
+metadata:
+  name: global
+  namespace: open-cluster-management-global-set
+spec:
+  clusterSets:
+    - global
+  tolerations:
+    - key: cluster.open-cluster-management.io/unreachable
+      operator: Equal
+    - key: cluster.open-cluster-management.io/unavailable
+      operator: Equal
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: PlacementBinding
+metadata:
+  name: batch-trigger-cc-upgrades-placement-binding
+  namespace: open-cluster-management-global-set
+placementRef:
+  name: global
+  kind: Placement
+  apiGroup: cluster.open-cluster-management.io
+subjects:
+  - name: batch-trigger-cc-upgrades
+    kind: Policy
+    apiGroup: policy.open-cluster-management.io
