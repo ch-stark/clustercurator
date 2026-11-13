@@ -1,13 +1,8 @@
----
 apiVersion: policy.open-cluster-management.io/v1
 kind: Policy
 metadata:
   name: batch-trigger-cc-upgrades
   namespace: open-cluster-management-global-set
-  annotations:
-    policy.open-cluster-management.io/categories: CM Configuration Management
-    policy.open-cluster-management.io/controls: CM-2 Baseline Configuration
-    policy.open-cluster-management.io/description: "Safely triggers ClusterCurator upgrade once per cluster across the fleet."
 spec:
   disabled: false
   remediationAction: enforce
@@ -26,20 +21,17 @@ spec:
           object-templates-raw: |
             {{- $targetVersion := "5.0.2" }}
             {{- $targetChannel := "candidate-5.1" }}
+            {{- $cv := (lookup "config.openshift.io/v1" "ClusterVersion" "" "version") }}
+            {{- $currentVersion := (dig "status" "desired" "version" "" $cv) }}
 
-            {{- range $cluster := (lookup "cluster.open-cluster-management.io/v1" "ManagedCluster" "" "").items }}
-              {{- $clusterName := $cluster.metadata.name }}
-              {{- $currentVersion := (dig "status" "version" "openshift" "" $cluster) }}
-
-              {{- /* Enforce upgrade on any fleet cluster whose OpenShift version != targetVersion */ -}}
-              {{- if and (ne $currentVersion "") (ne $currentVersion $targetVersion) }}
+            {{- if and (ne $currentVersion "") (ne $currentVersion $targetVersion) }}
             - complianceType: musthave
               objectDefinition:
                 apiVersion: cluster.open-cluster-management.io/v1beta1
                 kind: ClusterCurator
                 metadata:
-                  name: {{ $clusterName }}
-                  namespace: {{ $clusterName }}
+                  name: local-cluster
+                  namespace: local-cluster
                   labels:
                     fleet.openshift.io/target-version: {{ $targetVersion }}
                 spec:
@@ -48,5 +40,4 @@ spec:
                     desiredUpdate: {{ $targetVersion }}
                     channel: {{ $targetChannel }}
                     monitorTimeout: 120
-              {{- end }}
             {{- end }}
